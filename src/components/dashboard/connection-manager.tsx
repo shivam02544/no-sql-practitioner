@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Database, Plus, Key, CheckCircle, XCircle, Loader2, TestTube, Save, Trash2, Edit, Server, Globe, Shield, Clock, ExternalLink, HardDrive, ArrowRight } from 'lucide-react'
+import { Database, Plus, Key, CheckCircle, XCircle, Loader2, TestTube, Save, Trash2, Edit, Server, Globe, Shield, Clock, ExternalLink, HardDrive, ArrowRight, Eye, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { MongoDBConnection } from '@/types'
 
@@ -46,6 +46,19 @@ export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
   const [editingConnection, setEditingConnection] = useState<MongoDBConnection | null>(null)
   const [isTesting, setIsTesting] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number } | null>(null)
+  const [revealedUris, setRevealedUris] = useState<Set<string>>(new Set())
+
+  const toggleUriVisibility = (id: string) => {
+    setRevealedUris((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
 
   const [formData, setFormData] = useState({
     name: '',
@@ -289,9 +302,28 @@ export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
                   </CardHeader>
                   <CardContent className="pb-3">
                     <div className="space-y-2 text-xs text-muted-foreground">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Key className="h-3.5 w-3.5 flex-shrink-0" />
-                        <span className="font-mono truncate flex-1">{connection.uri.replace(/:[^:@]+@/, ':****@')}</span>
+                      <div className="flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Key className="h-3.5 w-3.5 flex-shrink-0" />
+                          <span className="font-mono truncate flex-1 select-all" title={revealedUris.has(connection.id) ? connection.uri : connection.uri.replace(/:[^:@]+@/, ':****@')}>
+                            {revealedUris.has(connection.id) ? connection.uri : connection.uri.replace(/:[^:@]+@/, ':****@')}
+                          </span>
+                        </div>
+                        {connection.uri.includes('@') && (
+                          <button
+                            type="button"
+                            onClick={() => toggleUriVisibility(connection.id)}
+                            className="p-1 rounded text-muted-foreground/70 hover:text-foreground hover:bg-muted/80 transition-colors flex-shrink-0"
+                            aria-label={revealedUris.has(connection.id) ? 'Hide password' : 'Show password'}
+                            title={revealedUris.has(connection.id) ? 'Hide password' : 'Show password'}
+                          >
+                            {revealedUris.has(connection.id) ? (
+                              <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Eye className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 min-w-0">
                         <Shield className="h-3.5 w-3.5 flex-shrink-0" />
