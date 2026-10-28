@@ -12,13 +12,16 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
 import { Search, Plus, ChevronLeft, ChevronRight, Filter, Edit, Trash2, Download, Upload, FileJson, FileText, Grid, ListTree as Tree, ArrowLeft, X, MoreHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Document, QueryFilter } from '@/types'
+import { Document, QueryFilter, MongoDBConnection } from '@/types'
 
 interface DocumentViewerProps {
   onBack: () => void
+  database?: string | null
+  collection?: string | null
+  activeConnection?: MongoDBConnection | null
 }
 
-export function DocumentViewer({ onBack }: DocumentViewerProps) {
+export function DocumentViewer({ onBack, database, collection, activeConnection }: DocumentViewerProps) {
   const [documents, setDocuments] = useState<Document[]>([])
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -36,19 +39,44 @@ export function DocumentViewer({ onBack }: DocumentViewerProps) {
   const fetchDocuments = useCallback(async () => {
     setLoading(true)
     try {
-      // In a real app, this would call the API
-      // const response = await fetch(`/api/connections/current/databases/${db}/collections/${coll}/documents?...`)
-      // For now, use mock data
+      if (database && collection) {
+        const connId = activeConnection?.id || 'current'
+        const headers: Record<string, string> = {}
+        if (activeConnection?.uri) {
+          headers['x-connection-uri'] = activeConnection.uri
+        }
+
+        const sortParam = sortField ? JSON.stringify({ [sortField]: sortOrder === 'asc' ? 1 : -1 }) : '{}'
+        const filterParam = JSON.stringify(filter.filter || {})
+        const skip = (currentPage - 1) * pageSize
+
+        const url = `/api/connections/${connId}/databases/${encodeURIComponent(database)}/collections/${encodeURIComponent(collection)}/documents?limit=${pageSize}&skip=${skip}&sort=${encodeURIComponent(sortParam)}&filter=${encodeURIComponent(filterParam)}`
+
+        const response = await fetch(url, { headers })
+        if (response.ok) {
+          const data = await response.json()
+          const docs: Document[] = data.documents || []
+          setDocuments(docs)
+          setTotalCount(data.totalCount ?? docs.length)
+          setColumns(extractColumns(docs))
+          return
+        }
+      }
+
       const mockDocs = generateMockDocuments(pageSize)
       setDocuments(mockDocs)
       setTotalCount(100)
       setColumns(extractColumns(mockDocs))
     } catch (error) {
       console.error('Failed to fetch documents:', error)
+      const mockDocs = generateMockDocuments(pageSize)
+      setDocuments(mockDocs)
+      setTotalCount(100)
+      setColumns(extractColumns(mockDocs))
     } finally {
       setLoading(false)
     }
-  }, [pageSize])
+  }, [database, collection, activeConnection, pageSize, currentPage, sortField, sortOrder, filter])
 
   useEffect(() => {
     fetchDocuments()
@@ -107,8 +135,12 @@ export function DocumentViewer({ onBack }: DocumentViewerProps) {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="min-w-0">
-            <h2 className="text-2xl font-bold tracking-tight truncate">Documents</h2>
-            <p className="text-sm text-muted-foreground mt-0.5 truncate">View, query, and manage collection documents</p>
+            <h2 className="text-2xl font-bold tracking-tight truncate">
+              {collection ? collection : 'Documents'}
+            </h2>
+            <p className="text-sm text-muted-foreground mt-0.5 truncate">
+              {database ? `${database} · ` : ''}{totalCount} document{totalCount === 1 ? '' : 's'}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap flex-shrink-0 self-start sm:self-auto">

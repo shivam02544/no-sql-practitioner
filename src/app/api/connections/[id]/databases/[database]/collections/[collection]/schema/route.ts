@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { connectionManager } from '@/services/mongodb'
+import { connectionManager, getConnection } from '@/services/mongodb'
 import { MongoDBConnection } from '@/types'
 import { schemaInferenceService } from '@/services/mongodb'
 
@@ -12,14 +12,26 @@ export async function GET(
     const searchParams = request.nextUrl.searchParams
     const sampleSize = parseInt(searchParams.get('sampleSize') || '1000')
 
-    const connection: MongoDBConnection = {
-      id,
-      name: 'Test',
-      uri: '',
-      type: 'local',
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+    const rawUri = request.headers.get('x-connection-uri')
+    const connection: MongoDBConnection | null =
+      getConnection(id) ||
+      (rawUri
+        ? {
+            id,
+            name: 'Direct Connection',
+            uri: rawUri,
+            type: 'local',
+            isActive: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }
+        : null)
+
+    if (!connection || !connection.uri) {
+      return NextResponse.json(
+        { error: 'No active MongoDB connection found. Please connect to a database in Connection Manager.' },
+        { status: 404 }
+      )
     }
 
     const client = await connectionManager.getClient(id, connection)
@@ -32,6 +44,9 @@ export async function GET(
     return NextResponse.json({ schema, visualization, profile })
   } catch (error) {
     console.error('Get schema error:', error)
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to infer schema' }, { status: 500 })
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to infer schema' },
+      { status: 500 }
+    )
   }
 }

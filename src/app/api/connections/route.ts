@@ -1,31 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { connectionManager } from '@/services/mongodb'
+import { getAllConnections, saveConnection } from '@/services/mongodb'
 
 export async function GET(): Promise<NextResponse> {
   try {
-    // In a real app, you'd fetch from a database
-    // For now, return mock data or from storage
-    return NextResponse.json({ connections: [] })
-  } catch {
-    return NextResponse.json({ error: 'Failed to fetch connections' }, { status: 500 })
+    const connections = getAllConnections()
+    return NextResponse.json({ connections })
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to fetch connections' },
+      { status: 500 }
+    )
   }
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const body = await request.json()
-    const { name, uri, database, type, options } = body
+    const { id, name, uri, database, type, options, isActive } = body
 
     if (!name || !uri) {
       return NextResponse.json({ error: 'Name and URI are required' }, { status: 400 })
     }
 
-    const connection = await connectionManager.createConnection({
+    const connection = saveConnection({
+      id,
       name,
       uri,
       database,
       type: type || 'local',
       options,
+      isActive: isActive ?? true,
     })
 
     return NextResponse.json({ connection })

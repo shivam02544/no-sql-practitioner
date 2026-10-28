@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { MongoDBConnection } from '@/types'
 import { Sidebar, SidebarHeader, SidebarFooter, SidebarContent, SidebarGroup, SidebarGroupLabel, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarMenuSub } from '@/components/ui/sidebar'
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, CollapsibleIcon } from '@/components/ui/collapsible'
 import { Button } from '@/components/ui/button'
@@ -100,6 +101,23 @@ export function Dashboard() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const { theme, setTheme } = useTheme()
+  const [activeConnection, setActiveConnection] = useState<MongoDBConnection | null>(null)
+  const [selectedDatabase, setSelectedDatabase] = useState<string | null>(null)
+  const [selectedCollection, setSelectedCollection] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/connections/active')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.connection) {
+          setActiveConnection(data.connection)
+          if (data.connection.database) {
+            setSelectedDatabase(data.connection.database)
+          }
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   const [documentationOpen, setDocumentationOpen] = useState(false)
@@ -184,11 +202,38 @@ export function Dashboard() {
   const ViewComponent = () => {
     switch (activeView) {
       case 'connections':
-        return <ConnectionManager onConnect={() => setActiveView('explorer')} />
+        return (
+          <ConnectionManager
+            activeConnectionId={activeConnection?.id}
+            onConnect={(conn) => {
+              if (conn) {
+                setActiveConnection(conn)
+                if (conn.database) setSelectedDatabase(conn.database)
+              }
+              setActiveView('explorer')
+            }}
+          />
+        )
       case 'explorer':
-        return <DatabaseExplorer onSelectCollection={() => setActiveView('documents')} />
+        return (
+          <DatabaseExplorer
+            activeConnection={activeConnection}
+            onSelectCollection={(db, coll) => {
+              setSelectedDatabase(db)
+              setSelectedCollection(coll)
+              setActiveView('documents')
+            }}
+          />
+        )
       case 'documents':
-        return <DocumentViewer onBack={() => setActiveView('explorer')} />
+        return (
+          <DocumentViewer
+            activeConnection={activeConnection}
+            database={selectedDatabase}
+            collection={selectedCollection}
+            onBack={() => setActiveView('explorer')}
+          />
+        )
       case 'query':
         return <QueryEditor onBack={() => setActiveView('explorer')} />
       case 'aggregation':

@@ -1,4 +1,5 @@
 export * from './connection-manager'
+export * from './connection-store'
 export * from './schema-inference'
 export * from './aggregation-builder'
 export * from './command-generator'

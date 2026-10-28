@@ -1,6 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { connectionManager } from '@/services/mongodb'
+import { connectionManager, getConnection } from '@/services/mongodb'
 import { MongoDBConnection, IndexDefinition } from '@/types'
+
+function resolveConnection(id: string, request: NextRequest): MongoDBConnection | null {
+  const rawUri = request.headers.get('x-connection-uri')
+  return (
+    getConnection(id) ||
+    (rawUri
+      ? {
+          id,
+          name: 'Direct Connection',
+          uri: rawUri,
+          type: 'local',
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }
+      : null)
+  )
+}
 
 export async function GET(
   request: NextRequest,
@@ -8,19 +26,16 @@ export async function GET(
 ): Promise<NextResponse> {
   try {
     const { id, database, collection } = await params
+    const connection = resolveConnection(id, request)
 
-    const connection: MongoDBConnection = {
-      id,
-      name: 'Test',
-      uri: '',
-      type: 'local',
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+    if (!connection || !connection.uri) {
+      return NextResponse.json(
+        { error: 'No active MongoDB connection found. Please connect to a database in Connection Manager.' },
+        { status: 404 }
+      )
     }
 
     const indexes = await connectionManager.getIndexes(id, connection, database, collection)
-
     return NextResponse.json({ indexes })
   } catch (error) {
     console.error('Get indexes error:', error)
@@ -41,14 +56,13 @@ export async function POST(
       return NextResponse.json({ error: 'Index keys are required' }, { status: 400 })
     }
 
-    const connection: MongoDBConnection = {
-      id,
-      name: 'Test',
-      uri: '',
-      type: 'local',
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+    const connection = resolveConnection(id, request)
+
+    if (!connection || !connection.uri) {
+      return NextResponse.json(
+        { error: 'No active MongoDB connection found. Please connect to a database in Connection Manager.' },
+        { status: 404 }
+      )
     }
 
     const index: IndexDefinition = {

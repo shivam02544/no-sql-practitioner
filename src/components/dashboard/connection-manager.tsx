@@ -13,11 +13,14 @@ import { Database, Plus, Key, CheckCircle, XCircle, Loader2, TestTube, Save, Tra
 import { cn } from '@/lib/utils'
 import { MongoDBConnection } from '@/types'
 
+import { useEffect } from 'react'
+
 interface ConnectionManagerProps {
-  onConnect: () => void
+  onConnect: (connection?: MongoDBConnection) => void
+  activeConnectionId?: string | null
 }
 
-export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
+export function ConnectionManager({ onConnect, activeConnectionId }: ConnectionManagerProps) {
   const [connections, setConnections] = useState<MongoDBConnection[]>([
     {
       id: 'conn-local-dev',
@@ -47,6 +50,17 @@ export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
   const [isTesting, setIsTesting] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number } | null>(null)
   const [revealedUris, setRevealedUris] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    fetch('/api/connections')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.connections && Array.isArray(data.connections) && data.connections.length > 0) {
+          setConnections(data.connections)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const toggleUriVisibility = (id: string) => {
     setRevealedUris((prev) => {
@@ -87,24 +101,30 @@ export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
       })
 
       if (response.ok) {
-        if (editingConnection) {
-          setConnections(prev => prev.map(c => c.id === editingConnection.id ? { ...c, ...formData } : c))
-        } else {
-          const newConn: MongoDBConnection = {
-            id: 'conn-' + Date.now(),
-            name: formData.name || 'New Connection',
-            uri: formData.uri,
-            database: formData.database || 'test',
-            type: formData.type,
-            isActive: false,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          }
-          setConnections(prev => [newConn, ...prev])
+        const data = await response.json()
+        const savedConn: MongoDBConnection = data.connection || {
+          id: editingConnection?.id || 'conn-' + Date.now(),
+          name: formData.name,
+          uri: formData.uri,
+          database: formData.database || 'test',
+          type: formData.type,
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         }
+
+        setConnections((prev) => {
+          const exists = prev.some((c) => c.id === savedConn.id)
+          if (exists) {
+            return prev.map((c) => (c.id === savedConn.id ? savedConn : c))
+          }
+          return [savedConn, ...prev]
+        })
+
         setEditingConnection(null)
         resetForm()
         setActiveTab('saved')
+        await handleConnect(savedConn)
       } else {
         const errorData = await response.json()
         setTestResult({ success: false, message: errorData.error || 'Failed to save connection' })
@@ -187,8 +207,22 @@ export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
     }
   }
 
-  const handleConnect = () => {
-    onConnect()
+  const handleConnect = async (conn: MongoDBConnection) => {
+    setConnections((prev) =>
+      prev.map((c) => ({
+        ...c,
+        isActive: c.id === conn.id,
+        lastConnectedAt: c.id === conn.id ? new Date() : c.lastConnectedAt,
+      }))
+    )
+    try {
+      await fetch('/api/connections/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: conn.id }),
+      })
+    } catch {}
+    onConnect(conn)
   }
 
   const resetForm = () => {
@@ -281,81 +315,83 @@ export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
             </Card>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {connections.map((connection) => (
-                <Card key={connection.id} className={cn('transition-all hover:shadow-md border bg-card/80', connection.isActive && 'border-primary ring-1 ring-primary/30')}>
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between gap-3 min-w-0">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className={cn('p-2.5 rounded-lg flex-shrink-0', connection.isActive ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground')}>
-                          {getTypeIcon(connection.type)}
+              {connections.map((connection) => {
+                const isConnActive = Boolean(connection.isActive || (activeConnectionId && connection.id === activeConnectionId))
+                return (
+                  <Card key={connection.id} className={cn('transition-all hover:shadow-md border bg-card/80', isConnActive && 'border-primary ring-1 ring-primary/30')}>
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-3 min-w-0">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className={cn('p-2.5 rounded-lg flex-shrink-0', isConnActive ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground')}>
+                            {getTypeIcon(connection.type)}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className="font-semibold text-base truncate">{connection.name}</h3>
+                            <p className="text-xs text-muted-foreground truncate">{connection.database || 'Default database'}</p>
+                          </div>
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <h3 className="font-semibold text-base truncate">{connection.name}</h3>
-                          <p className="text-xs text-muted-foreground truncate">{connection.database || 'Default database'}</p>
-                        </div>
+                        <Badge variant={isConnActive ? 'default' : 'outline'} className="gap-1 flex-shrink-0 text-[11px]">
+                          {isConnActive && <CheckCircle className="h-3 w-3" />}
+                          {getTypeLabel(connection.type)}
+                        </Badge>
                       </div>
-                      <Badge variant={connection.isActive ? 'default' : 'outline'} className="gap-1 flex-shrink-0 text-[11px]">
-                        {connection.isActive && <CheckCircle className="h-3 w-3" />}
-                        {getTypeLabel(connection.type)}
-                      </Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="pb-3">
-                    <div className="space-y-2 text-xs text-muted-foreground">
-                      <div className="flex items-center justify-between gap-2 min-w-0">
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <Key className="h-3.5 w-3.5 flex-shrink-0" />
-                          <span className="font-mono truncate flex-1 select-all" title={revealedUris.has(connection.id) ? connection.uri : connection.uri.replace(/:[^:@]+@/, ':****@')}>
-                            {revealedUris.has(connection.id) ? connection.uri : connection.uri.replace(/:[^:@]+@/, ':****@')}
-                          </span>
+                    </CardHeader>
+                    <CardContent className="pb-3">
+                      <div className="space-y-2 text-xs text-muted-foreground">
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <Key className="h-3.5 w-3.5 flex-shrink-0" />
+                            <span className="font-mono truncate flex-1 select-all" title={revealedUris.has(connection.id) ? connection.uri : connection.uri.replace(/:[^:@]+@/, ':****@')}>
+                              {revealedUris.has(connection.id) ? connection.uri : connection.uri.replace(/:[^:@]+@/, ':****@')}
+                            </span>
+                          </div>
+                          {connection.uri.includes('@') && (
+                            <button
+                              type="button"
+                              onClick={() => toggleUriVisibility(connection.id)}
+                              className="p-1 rounded text-muted-foreground/70 hover:text-foreground hover:bg-muted/80 transition-colors flex-shrink-0"
+                              aria-label={revealedUris.has(connection.id) ? 'Hide password' : 'Show password'}
+                              title={revealedUris.has(connection.id) ? 'Hide password' : 'Show password'}
+                            >
+                              {revealedUris.has(connection.id) ? (
+                                <EyeOff className="h-3.5 w-3.5" />
+                              ) : (
+                                <Eye className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          )}
                         </div>
-                        {connection.uri.includes('@') && (
-                          <button
-                            type="button"
-                            onClick={() => toggleUriVisibility(connection.id)}
-                            className="p-1 rounded text-muted-foreground/70 hover:text-foreground hover:bg-muted/80 transition-colors flex-shrink-0"
-                            aria-label={revealedUris.has(connection.id) ? 'Hide password' : 'Show password'}
-                            title={revealedUris.has(connection.id) ? 'Hide password' : 'Show password'}
-                          >
-                            {revealedUris.has(connection.id) ? (
-                              <EyeOff className="h-3.5 w-3.5" />
-                            ) : (
-                              <Eye className="h-3.5 w-3.5" />
-                            )}
-                          </button>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Shield className="h-3.5 w-3.5 flex-shrink-0" />
+                          <span className="truncate">{connection.options?.ssl ? 'SSL / TLS Enabled' : 'SSL Disabled'}</span>
+                        </div>
+                        {connection.lastConnectedAt && (
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+                            <span className="truncate">Last active: {new Date(connection.lastConnectedAt).toLocaleDateString()}</span>
+                          </div>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Shield className="h-3.5 w-3.5 flex-shrink-0" />
-                        <span className="truncate">{connection.options?.ssl ? 'SSL / TLS Enabled' : 'SSL Disabled'}</span>
-                      </div>
-                      {connection.lastConnectedAt && (
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Clock className="h-3.5 w-3.5 flex-shrink-0" />
-                          <span className="truncate">Last active: {new Date(connection.lastConnectedAt).toLocaleDateString()}</span>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                  <CardFooter className="pt-2 flex gap-2">
-                    <Button
-                      variant={connection.isActive ? "default" : "outline"}
-                      size="sm"
-                      className="flex-1 text-xs shadow-xs"
-                      onClick={handleConnect}
-                    >
-                      {connection.isActive ? (
-                        <>
-                          <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
-                          Open Explorer
-                        </>
-                      ) : (
-                        <>
-                          <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                          Connect
-                        </>
-                      )}
-                    </Button>
+                    </CardContent>
+                    <CardFooter className="pt-2 flex gap-2">
+                      <Button
+                        variant={isConnActive ? "default" : "outline"}
+                        size="sm"
+                        className="flex-1 text-xs shadow-xs"
+                        onClick={() => handleConnect(connection)}
+                      >
+                        {isConnActive ? (
+                          <>
+                            <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
+                            Open Explorer
+                          </>
+                        ) : (
+                          <>
+                            <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                            Connect
+                          </>
+                        )}
+                      </Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(connection)} title="Edit">
                       <Edit className="h-3.5 w-3.5" />
                     </Button>
@@ -364,7 +400,7 @@ export function ConnectionManager({ onConnect }: ConnectionManagerProps) {
                     </Button>
                   </CardFooter>
                 </Card>
-              ))}
+              )})}
             </div>
           )}
         </TabsContent>

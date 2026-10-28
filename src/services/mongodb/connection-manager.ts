@@ -25,6 +25,16 @@ export class ConnectionManager {
     return newConnection
   }
 
+  private extractDatabaseFromUri(uri: string): string | null {
+    try {
+      const match = uri.match(/\/([^/?]+)(\?|$)/)
+      if (match && match[1] && match[1] !== 'admin') {
+        return match[1]
+      }
+    } catch {}
+    return null
+  }
+
   async testConnection(connection: MongoDBConnection): Promise<{ success: boolean; error?: string; latencyMs?: number }> {
     const startTime = Date.now()
     let client: MongoClient | null = null
@@ -35,7 +45,12 @@ export class ConnectionManager {
 
       client = new MongoClient(uri, options)
       await client.connect()
-      await client.db('admin').command({ ping: 1 })
+      try {
+        await client.db('admin').command({ ping: 1 })
+      } catch {
+        const targetDb = connection.database || this.extractDatabaseFromUri(uri) || 'test'
+        await client.db(targetDb).command({ ping: 1 })
+      }
 
       const latencyMs = Date.now() - startTime
       return { success: true, latencyMs }
@@ -74,15 +89,27 @@ export class ConnectionManager {
 
   async getDatabases(connectionId: string, connection: MongoDBConnection): Promise<DatabaseInfo[]> {
     const client = await this.getClient(connectionId, connection)
-    const adminDb = client.db('admin')
+    let databases: Array<{ name: string; sizeOnDisk?: number }> = []
 
-    const result = await adminDb.command({ listDatabases: 1, nameOnly: false })
-    const databases = result.databases || []
+    try {
+      const adminDb = client.db('admin')
+      const result = await adminDb.command({ listDatabases: 1, nameOnly: false })
+      databases = result.databases || []
+    } catch {
+      // If listDatabases is restricted by Atlas role, use the connection database
+      const fallbackDb = connection.database || this.extractDatabaseFromUri(decrypt(connection.uri)) || 'test'
+      databases = [{ name: fallbackDb }]
+    }
+
+    // Also if connection.database was explicitly set, make sure it's in the list
+    if (connection.database && !databases.some(d => d.name === connection.database)) {
+      databases.push({ name: connection.database })
+    }
 
     const databaseInfos: DatabaseInfo[] = []
 
     for (const db of databases) {
-      if (['admin', 'local', 'config'].includes(db.name)) continue
+      if (['admin', 'local', 'config'].includes(db.name) && databases.length > 1) continue
 
       try {
         const dbInstance = client.db(db.name)
@@ -101,12 +128,19 @@ export class ConnectionManager {
           freeStorageSize: stats.freeStorageSize || 0,
         })
       } catch {
+        // Count collections directly if dbStats is restricted
+        let collCount = 0
+        try {
+          const colls = await client.db(db.name).listCollections().toArray()
+          collCount = colls.length
+        } catch {}
+
         databaseInfos.push({
           name: db.name,
-          sizeOnDisk: 0,
+          sizeOnDisk: db.sizeOnDisk || 0,
           dataSize: 0,
           indexSize: 0,
-          collections: 0,
+          collections: collCount,
           views: 0,
           objects: 0,
           avgObjSize: 0,
@@ -127,36 +161,49 @@ export class ConnectionManager {
     const collectionInfos: CollectionInfo[] = []
 
     for (const coll of collections) {
+      if (coll.name.startsWith('system.')) continue
+
+      let count = 0
+      let size = 0
+      let avgObjSize = 0
+      let storageSize = 0
+      let totalIndexSize = 0
+      let indexes: IndexInfo[] = []
+
+      try {
+        indexes = await this.getIndexes(connectionId, connection, databaseName, coll.name)
+      } catch {}
+
       try {
         const stats = await db.command({ collStats: coll.name })
-        const indexes = await this.getIndexes(connectionId, connection, databaseName, coll.name)
-
-        collectionInfos.push({
-          name: coll.name,
-          type: (coll.type === 'view' ? 'view' : 'collection'),
-          count: stats.count || 0,
-          size: stats.size || 0,
-          avgObjSize: stats.avgObjSize || 0,
-          storageSize: stats.storageSize || 0,
-          freeStorageSize: stats.freeStorageSize || 0,
-          totalIndexSize: stats.totalIndexSize || 0,
-          indexes,
-          capped: stats.capped || false,
-          max: stats.max,
-        })
+        count = stats.count ?? 0
+        size = stats.size || 0
+        avgObjSize = stats.avgObjSize || 0
+        storageSize = stats.storageSize || 0
+        totalIndexSize = stats.totalIndexSize || 0
       } catch {
-        collectionInfos.push({
-          name: coll.name,
-          type: (coll.type === 'view' ? 'view' : 'collection'),
-          count: 0,
-          size: 0,
-          avgObjSize: 0,
-          storageSize: 0,
-          freeStorageSize: 0,
-          totalIndexSize: 0,
-          indexes: [],
-        })
+        // Fallback for MongoDB 6.0+ / Atlas permissions
+        try {
+          count = await db.collection(coll.name).estimatedDocumentCount()
+        } catch {
+          try {
+            count = await db.collection(coll.name).countDocuments({})
+          } catch {}
+        }
       }
+
+      collectionInfos.push({
+        name: coll.name,
+        type: (coll.type === 'view' ? 'view' : 'collection'),
+        count,
+        size,
+        avgObjSize,
+        storageSize,
+        freeStorageSize: 0,
+        totalIndexSize,
+        indexes,
+        capped: false,
+      })
     }
 
     return collectionInfos

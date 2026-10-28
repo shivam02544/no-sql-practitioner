@@ -1,14 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Database, Table, Plus, RefreshCw, FolderOpen, FileText, Layers, ExternalLink } from 'lucide-react'
+import { Database, Table, Plus, RefreshCw, FolderOpen, FileText, Layers, ExternalLink, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { DatabaseInfo, CollectionInfo } from '@/types'
+import { DatabaseInfo, CollectionInfo, MongoDBConnection } from '@/types'
 
 const DEMO_DATABASES: DatabaseInfo[] = [
   {
@@ -181,36 +181,96 @@ const DEMO_COLLECTIONS: Record<string, CollectionInfo[]> = {
 
 interface DatabaseExplorerProps {
   onSelectCollection: (database: string, collection: string) => void
+  activeConnection?: MongoDBConnection | null
 }
 
-export function DatabaseExplorer({ onSelectCollection }: DatabaseExplorerProps) {
-  const [databases] = useState<DatabaseInfo[]>(DEMO_DATABASES)
-  const [selectedDatabase, setSelectedDatabase] = useState<string | null>('ecommerce')
-  const [collections, setCollections] = useState<CollectionInfo[]>(DEMO_COLLECTIONS['ecommerce'] || [])
+export function DatabaseExplorer({ onSelectCollection, activeConnection }: DatabaseExplorerProps) {
+  const [databases, setDatabases] = useState<DatabaseInfo[]>([])
+  const [selectedDatabase, setSelectedDatabase] = useState<string | null>(null)
+  const [collections, setCollections] = useState<CollectionInfo[]>([])
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const filteredCollections = collections.filter(c =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const handleDatabaseSelect = async (dbName: string) => {
-    setSelectedDatabase(dbName)
+  const fetchCollections = useCallback(async (dbName: string) => {
     setLoading(true)
+    setError(null)
     try {
-      const response = await fetch(`/api/connections/current/databases/${dbName}/collections`)
+      const connId = activeConnection?.id || 'current'
+      const headers: Record<string, string> = {}
+      if (activeConnection?.uri) {
+        headers['x-connection-uri'] = activeConnection.uri
+      }
+      const response = await fetch(`/api/connections/${connId}/databases/${encodeURIComponent(dbName)}/collections`, { headers })
       if (response.ok) {
         const data = await response.json()
         setCollections(data.collections || [])
       } else {
+        const errData = await response.json().catch(() => ({}))
         setCollections(DEMO_COLLECTIONS[dbName] || [])
+        if (errData.error) setError(errData.error)
       }
-    } catch {
+    } catch (err) {
       setCollections(DEMO_COLLECTIONS[dbName] || [])
+      setError(err instanceof Error ? err.message : 'Failed to fetch collections')
     } finally {
       setLoading(false)
     }
+  }, [activeConnection])
+
+  const fetchDatabases = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const connId = activeConnection?.id || 'current'
+      const headers: Record<string, string> = {}
+      if (activeConnection?.uri) {
+        headers['x-connection-uri'] = activeConnection.uri
+      }
+      const response = await fetch(`/api/connections/${connId}/databases`, { headers })
+      if (response.ok) {
+        const data = await response.json()
+        const dbs: DatabaseInfo[] = data.databases || []
+        if (dbs.length > 0) {
+          setDatabases(dbs)
+          const targetDb =
+            activeConnection?.database && dbs.some((d) => d.name === activeConnection.database)
+              ? activeConnection.database
+              : dbs[0].name
+          setSelectedDatabase(targetDb)
+          await fetchCollections(targetDb)
+        } else {
+          setDatabases([])
+          setCollections([])
+        }
+      } else {
+        const errData = await response.json().catch(() => ({}))
+        setDatabases(DEMO_DATABASES)
+        setSelectedDatabase('ecommerce')
+        setCollections(DEMO_COLLECTIONS['ecommerce'] || [])
+        if (errData.error) setError(errData.error)
+      }
+    } catch {
+      setDatabases(DEMO_DATABASES)
+      setSelectedDatabase('ecommerce')
+      setCollections(DEMO_COLLECTIONS['ecommerce'] || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [activeConnection, fetchCollections])
+
+  useEffect(() => {
+    fetchDatabases()
+  }, [fetchDatabases])
+
+  const handleDatabaseSelect = async (dbName: string) => {
+    setSelectedDatabase(dbName)
+    await fetchCollections(dbName)
   }
 
   const handleCollectionClick = (collectionName: string) => {
@@ -223,14 +283,39 @@ export function DatabaseExplorer({ onSelectCollection }: DatabaseExplorerProps) 
     <div className="space-y-6 max-w-full">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Database Explorer</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-2xl font-bold tracking-tight">Database Explorer</h2>
+            {activeConnection && (
+              <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/20">
+                {activeConnection.name}
+              </Badge>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground mt-0.5">Browse databases, inspect collections, and view statistics</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => {}} className="self-start sm:self-auto gap-2">
-          <RefreshCw className="h-3.5 w-3.5" />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => fetchDatabases()}
+          disabled={loading}
+          className="self-start sm:self-auto gap-2"
+        >
+          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
           Refresh
         </Button>
       </div>
+
+      {error && (
+        <div className="p-3 rounded-xl border border-destructive/30 bg-destructive/10 text-xs text-destructive flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <span className="truncate">{error}</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => fetchDatabases()} className="h-7 text-xs flex-shrink-0">
+            Retry
+          </Button>
+        </div>
+      )}
 
       <div className="grid gap-6 md:grid-cols-12">
         {/* Databases Panel */}
